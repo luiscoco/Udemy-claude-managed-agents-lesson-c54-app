@@ -1,0 +1,75 @@
+// Canonical event fan-in over host-authorized session/thread sources.
+import type { BetaManagedAgentsSessionEvent as Event } from "@anthropic-ai/sdk/resources/beta/sessions/events";
+export type Source = { sessionId: string; threadId: string | null;
+  open(signal: AbortSignal): Promise<AsyncIterable<Event>> };
+export const sourceKey = (sessionId: string, threadId: string | null) => JSON.stringify([sessionId, threadId]);
+export class Telemetry {
+  rootTraceId: string;
+  seen = new Set<string>(); requests = new Set<string>();
+  states = new Map<string, string>(); connections = new Map<string, string>();
+  snapshots = new Map<string, unknown>();
+  input = 0; output = 0; cacheRead = 0; cacheWrite = 0;
+  providerErrors = 0; observerErrors = 0;
+  constructor(rootTraceId: string) { this.rootTraceId = rootTraceId; }
+  ingest(source: Source, event: Event) {
+    const eventKey = JSON.stringify([source.sessionId, event.id]);
+    if (this.seen.has(eventKey)) return;
+    this.seen.add(eventKey); // In-memory only; production persists before checkpointing.
+    const scoped = "session_thread_id" in event && event.session_thread_id ? event.session_thread_id : source.threadId;
+    const key = sourceKey(source.sessionId, scoped);
+    if (event.type === "span.model_request_end") {
+      const requestKey = JSON.stringify([source.sessionId, event.model_request_start_id]);
+      if (!this.requests.has(requestKey)) {
+        this.requests.add(requestKey);
+        this.input += event.model_usage.input_tokens; this.output += event.model_usage.output_tokens;
+        this.cacheRead += event.model_usage.cache_read_input_tokens;
+        this.cacheWrite += event.model_usage.cache_creation_input_tokens;
+      }
+    }
+    if (event.type === "session.usage") this.snapshots.set(source.sessionId, event.usage);
+    if (event.type === "session.status_running" || event.type === "session.thread_status_running") this.states.set(key, "running");
+    if (event.type === "session.status_idle" || event.type === "session.thread_status_idle") this.states.set(key, event.stop_reason.type);
+    if (event.type === "session.status_terminated" || event.type === "session.thread_status_terminated") this.states.set(key, "terminated");
+    if (event.type === "session.error") this.providerErrors++;
+  }
+  summary() {
+    return { source: "observed-canonical-events", rootTraceId: this.rootTraceId,
+      input: this.input, output: this.output, cacheRead: this.cacheRead, cacheWrite: this.cacheWrite,
+      observedRunningTracks: [...this.states.values()].filter(s => s === "running").length,
+      providerErrors: this.providerErrors, observerErrors: this.observerErrors,
+      coverage: "only supplied sources and observation window" };
+  }
+}
+export async function fanIn(sources: readonly Source[], telemetry: Telemetry, signal: AbortSignal) {
+  if (sources.length > 20 || new Set(sources.map(s => sourceKey(s.sessionId, s.threadId))).size !== sources.length)
+    throw new Error("Invalid source inventory");
+  await Promise.allSettled(sources.map(async source => {
+    const key = sourceKey(source.sessionId, source.threadId);
+    telemetry.connections.set(key, "opening");
+    try {
+      const events = await source.open(signal); telemetry.connections.set(key, "observing");
+      let count = 0;
+      for await (const event of events) {
+        if (signal.aborted) break;
+        if (++count > 500) { telemetry.connections.set(key, "event_limit"); break; }
+        telemetry.ingest(source, event);
+      }
+      if (telemetry.connections.get(key) !== "event_limit")
+        telemetry.connections.set(key, signal.aborted ? "window_aborted" : "stream_ended");
+    } catch {
+      if (signal.aborted) telemetry.connections.set(key, "window_aborted");
+      else { telemetry.observerErrors++; telemetry.connections.set(key, "observer_error"); }
+    }
+  }));
+  return telemetry.summary();
+}
+// open() MUST honor AbortSignal, including during idle network waits. Use a bounded
+// observation-window controller in the caller. Disconnect does not prove worker stop.
+// Supply reconciled canonical events in order per track; previews are excluded.
+// Late replayed status needs canonical ordering/checkpoints in production.
+// Root trace ID is host correlation, not automatic propagation or W3C tracing.
+// Do not mix summed spans with cumulative session snapshots or count aggregate
+// session running state as an extra worker alongside every child thread.
+// No invoice cost or complete-coverage claim; primary streams omit child detail.
+// Production needs durable conflict-aware deduplication, coverage/gap tracking,
+// bounded ingestion/backpressure and authorization for every supplied stream.

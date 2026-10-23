@@ -1,0 +1,29 @@
+{
+  "source": "live-provider-commentary",
+  "sessionId": "sesn_01K5S9MvTiY7M3o6KXeWa4Zy",
+  "answer": "This local teaching experiment covers **Monitoring Multi-agent Telemetry** and demonstrates how to aggregate token usage across multiple sessions and threads without double-counting. It authorizes each session/thread pair, deduplicates by full source key, and sums only distinct request spans (200 tokens across two tracks of 100 each). Session snapshots are tracked separately and intentionally excluded from the running total to avoid inflating the sum.",
+  "stopReason": "end_turn",
+  "eventTypes": [
+    "session.status_running",
+    "session.thread_status_running",
+    "user.message",
+    "span.model_request_start",
+    "agent.thinking",
+    "agent.message",
+    "span.model_request_end",
+    "session.thread_status_idle",
+    "session.usage",
+    "session.status_idle"
+  ],
+  "requestUsage": [
+    {
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "input_tokens": 645,
+      "output_tokens": 126,
+      "speed": "standard"
+    }
+  ],
+  "experimentHash": "8b2d82789eff202ca2eead3e3eae70a2e9e8ef66f464cf0da4497ee325c74fa0",
+  "scope": "A real text-only model response about the local experiment. External integrations and the experiment's correctness are not certified by this response."
+}
