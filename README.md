@@ -42,27 +42,87 @@ CLAUDE_MANAGED_ENVIRONMENT_ID=your_environment_id
 PORT=3054
 ```
 
-## How the application was developed
+## How the app was build
 
-The browser collects inputs; the Node host validates requests; the lesson implementation produces observable evidence. The architecture page walks through the real source with numbered steps, prerequisite configuration, source filenames and code excerpts.
+### 1. Bound telemetry tracks and deduplicate full source keys
 
-### Lesson implementation
+The loop combines session, thread and span identity before adding each authored 100-token observation. Repeated delivery of that same source key is ignored.
 
-[src/lesson.ts](https://github.com/luiscoco/Udemy-claude-managed-agents-lesson-c54-app/blob/main/src/lesson.ts)
+Source: [src/lesson.ts](src/lesson.ts#L13) · selected statements
 
 ```typescript
-  async run(input) {
+const workers = number(input, "workers");
 
-const workers=number(input,"workers");if(!Number.isInteger(workers)||workers<1||workers>8)throw new Error("Use one to eight worker tracks");
-const seen=new Set<string>(),tracks:Input[]=[];let total=0;
-for(let w=0;w<workers;w++){const key=`session-${w}:thread-${w}:span-1`;const deliveries=flag(input,"duplicateSpans")?2:1;for(let i=0;i<deliveries;i++){if(seen.has(key))continue;seen.add(key);total+=100;tracks.push({sessionId:`session-${w}`,threadId:`thread-${w}`,tokens:100});}}
-return report("passed","Aggregated the authorized authored request tracks",{requestTokens:total,tracks,sessionSnapshot:flag(input,"includeSessionSnapshot")?{tokens:total}:null,snapshotAddedToTotal:false,coverage:"authored tracks only"},["Authorize every session and thread","Deduplicate using the full source key","Sum distinct request spans","Keep session snapshots outside the sum"]);
+if (!Number.isInteger(workers) || workers < 1 || workers > 8)
+  throw new Error("Use one to eight worker tracks");
 
+const seen = new Set<string>(),
+  tracks: Input[] = [];
+
+// ... other source statements omitted ...
+for (let w = 0; w < workers; w++) {
+  const key = `session-${w}:thread-${w}:span-1`;
+  const deliveries = flag(input, "duplicateSpans") ? 2 : 1;
+  for (let i = 0; i < deliveries; i++) {
+    if (seen.has(key)) continue;
+    seen.add(key);
+    total += 100;
+    tracks.push({
+      sessionId: `session-${w}`,
+      threadId: `thread-${w}`,
+      tokens: 100,
+    });
   }
-};
+}
 ```
 
-Read the architecture page for the remaining source excerpts and explanations, including input handling and optional provider behavior. The diagram describes this application, rather than implying that an external integration has been implemented.
+### 2. Keep request totals separate from session snapshots
+
+An optional snapshot is displayed but never added to the request sum. The coverage label remains authored tracks only; the reducer does not discover or authorize real worker streams.
+
+Source: [src/lesson.ts](src/lesson.ts#L16)
+
+```typescript
+return report(
+  "passed",
+  "Aggregated the authorized authored request tracks",
+  {
+    requestTokens: total,
+    tracks,
+    sessionSnapshot: flag(input, "includeSessionSnapshot")
+      ? { tokens: total }
+      : null,
+    snapshotAddedToTotal: false,
+    coverage: "authored tracks only",
+  },
+  [
+    "Authorize every session and thread",
+    "Deduplicate using the full source key",
+    "Sum distinct request spans",
+    "Keep session snapshots outside the sum",
+  ],
+);
+```
+
+### Check your understanding
+
+Run **Deduplicate worker spans** in the application. Compare the result with these scenario expectations:
+
+```json
+{
+  "input": {
+    "workers": 2,
+    "duplicateSpans": true,
+    "includeSessionSnapshot": true
+  },
+  "expectedOutcome": "passed",
+  "checkEvidence": {
+    "requestTokens": 200
+  }
+}
+```
+
+Then try **A single worker window**. Its expected outcome is `passed`; identify the condition or evidence field that explains the difference.
 
 ## Validation
 
